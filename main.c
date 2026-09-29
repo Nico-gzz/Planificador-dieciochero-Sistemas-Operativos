@@ -8,6 +8,7 @@
 #include "dag.h"
 
 #define MAX_ACTIVIDADES 10000
+#define MAX_EDGES 16
 
 void trim(char *s) {
     int len = strlen(s);
@@ -54,6 +55,13 @@ int parsear_linea(char *linea, Actividad *act) {
     return 0;
 }
 
+int buscar_indice(Actividad *actividades, int total, char *id) {
+    for (int j = 0; j < total; j++) {
+        if (strcmp(actividades[j].id, id) == 0) return j;
+    }
+    return -1;
+}
+
 int main(int argc, char *argv[]) {
     if (argc != 3) {
         fprintf(stderr, "Uso: %s plan.txt K\n", argv[0]);
@@ -69,7 +77,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    Actividad actividades[MAX_ACTIVIDADES];
+    static Actividad actividades[MAX_ACTIVIDADES];
     int total = 0;
     char linea[512];
 
@@ -86,6 +94,27 @@ int main(int argc, char *argv[]) {
 
     printf("Se cargaron %d actividades (K=%d)\n", total, K);
 
+    // Crear un pipe por cada dependencia (borde del DAG)
+    static int pipe_read[MAX_ACTIVIDADES][MAX_EDGES];
+    static int pipe_write_out[MAX_ACTIVIDADES][MAX_EDGES];
+    static int num_out[MAX_ACTIVIDADES] = {0};
+
+    for (int i = 0; i < total; i++) {
+        for (int d = 0; d < actividades[i].num_deps; d++) {
+            int idx_dep = buscar_indice(actividades, total, actividades[i].deps[d]);
+            if (idx_dep == -1) continue;
+
+            int fd[2];
+            if (pipe(fd) == -1) {
+                perror("pipe");
+                return 1;
+            }
+            pipe_read[i][d] = fd[0];
+            pipe_write_out[idx_dep][num_out[idx_dep]] = fd[1];
+            num_out[idx_dep]++;
+        }
+    }
+
     int completado[MAX_ACTIVIDADES] = {0};
     int corriendo[MAX_ACTIVIDADES] = {0};
     pid_t pid_de[MAX_ACTIVIDADES];
@@ -100,13 +129,7 @@ int main(int argc, char *argv[]) {
 
             int listo = 1;
             for (int d = 0; d < actividades[i].num_deps; d++) {
-                int idx_dep = -1;
-                for (int j = 0; j < total; j++) {
-                    if (strcmp(actividades[j].id, actividades[i].deps[d]) == 0) {
-                        idx_dep = j;
-                        break;
-                    }
-                }
+                int idx_dep = buscar_indice(actividades, total, actividades[i].deps[d]);
                 if (idx_dep == -1 || !completado[idx_dep]) {
                     listo = 0;
                     break;
@@ -122,14 +145,33 @@ int main(int argc, char *argv[]) {
             }
 
             if (pid == 0) {
+                char buffer[128];
+                for (int d = 0; d < actividades[i].num_deps; d++) {
+                    ssize_t n = read(pipe_read[i][d], buffer, sizeof(buffer) - 1);
+                    if (n > 0) {
+                        buffer[n] = '\0';
+                        printf("[hijo %d] recibido de %s: %s\n",
+                               getpid(), actividades[i].deps[d], buffer);
+                    }
+                }
+
                 printf("[hijo %d] ejecutando %s (%s), %dms\n",
                        getpid(), actividades[i].id, actividades[i].nombre,
                        actividades[i].tiempo_ms);
+
                 struct timespec ts;
                 ts.tv_sec = actividades[i].tiempo_ms / 1000;
                 ts.tv_nsec = (actividades[i].tiempo_ms % 1000) * 1000000L;
                 nanosleep(&ts, NULL);
+
                 printf("[hijo %d] terminó %s\n", getpid(), actividades[i].id);
+
+                char msg[128];
+                snprintf(msg, sizeof(msg), "%s completada por PID %d", actividades[i].id, getpid());
+                for (int k = 0; k < num_out[i]; k++) {
+                    write(pipe_write_out[i][k], msg, strlen(msg) + 1);
+                }
+
                 exit(0);
             }
 
