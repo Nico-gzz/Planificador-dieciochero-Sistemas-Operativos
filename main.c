@@ -4,11 +4,24 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/wait.h>
 #include "dag.h"
 
 #define MAX_ACTIVIDADES 10000
 #define MAX_EDGES 16
+
+static pid_t pids_activos[MAX_ACTIVIDADES];
+static int cantidad_pids_activos = 0;
+
+void manejador_sigint(int sig) {
+    (void)sig;
+    fprintf(stderr, "\nSIGINT recibido: abortando todas las actividades...\n");
+    for (int i = 0; i < cantidad_pids_activos; i++) {
+        kill(pids_activos[i], SIGTERM);
+    }
+    exit(1);
+}
 
 void trim(char *s) {
     int len = strlen(s);
@@ -68,6 +81,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    signal(SIGINT, manejador_sigint);
+
     char *archivo = argv[1];
     int K = atoi(argv[2]);
 
@@ -94,7 +109,6 @@ int main(int argc, char *argv[]) {
 
     printf("Se cargaron %d actividades (K=%d)\n", total, K);
 
-    // Crear un pipe por cada dependencia (borde del DAG)
     static int pipe_read[MAX_ACTIVIDADES][MAX_EDGES];
     static int pipe_write_out[MAX_ACTIVIDADES][MAX_EDGES];
     static int num_out[MAX_ACTIVIDADES] = {0};
@@ -116,6 +130,8 @@ int main(int argc, char *argv[]) {
     }
 
     int completado[MAX_ACTIVIDADES] = {0};
+    int fallido[MAX_ACTIVIDADES] = {0};
+    int abortado[MAX_ACTIVIDADES] = {0};
     int corriendo[MAX_ACTIVIDADES] = {0};
     pid_t pid_de[MAX_ACTIVIDADES];
     int terminados = 0;
@@ -124,16 +140,29 @@ int main(int argc, char *argv[]) {
     while (terminados < total) {
 
         for (int i = 0; i < total; i++) {
-            if (completado[i] || corriendo[i]) continue;
+            if (completado[i] || corriendo[i] || fallido[i] || abortado[i]) continue;
             if (activos >= K) break;
 
             int listo = 1;
+            int rama_rota = 0;
             for (int d = 0; d < actividades[i].num_deps; d++) {
                 int idx_dep = buscar_indice(actividades, total, actividades[i].deps[d]);
-                if (idx_dep == -1 || !completado[idx_dep]) {
+                if (idx_dep == -1) continue;
+                if (fallido[idx_dep] || abortado[idx_dep]) {
+                    rama_rota = 1;
+                    break;
+                }
+                if (!completado[idx_dep]) {
                     listo = 0;
                     break;
                 }
+            }
+
+            if (rama_rota) {
+                abortado[i] = 1;
+                terminados++;
+                fprintf(stderr, "Actividad %s abortada (dependencia fallida)\n", actividades[i].id);
+                continue;
             }
 
             if (!listo) continue;
@@ -164,6 +193,12 @@ int main(int argc, char *argv[]) {
                 ts.tv_nsec = (actividades[i].tiempo_ms % 1000) * 1000000L;
                 nanosleep(&ts, NULL);
 
+                int simular_fallo = (rand() % 10 == 0);
+                if (simular_fallo) {
+                    fprintf(stderr, "[hijo %d] FALLÓ %s\n", getpid(), actividades[i].id);
+                    exit(2);
+                }
+
                 printf("[hijo %d] terminó %s\n", getpid(), actividades[i].id);
 
                 char msg[128];
@@ -177,18 +212,29 @@ int main(int argc, char *argv[]) {
 
             corriendo[i] = 1;
             pid_de[i] = pid;
+            pids_activos[cantidad_pids_activos++] = pid;
             activos++;
+        }
+
+        if (activos == 0 && terminados < total) {
+            continue;
         }
 
         int status;
         pid_t pid_terminado = wait(&status);
+        if (pid_terminado < 0) continue;
 
         for (int i = 0; i < total; i++) {
             if (corriendo[i] && pid_de[i] == pid_terminado) {
                 corriendo[i] = 0;
-                completado[i] = 1;
-                terminados++;
                 activos--;
+
+                if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
+                    fallido[i] = 1;
+                } else {
+                    completado[i] = 1;
+                }
+                terminados++;
                 break;
             }
         }
