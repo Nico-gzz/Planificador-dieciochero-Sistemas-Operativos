@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 #include "dag.h"
 
 #define MAX_ACTIVIDADES 10000
@@ -82,6 +83,13 @@ int main(int argc, char *argv[]) {
     }
 
     signal(SIGINT, manejador_sigint);
+
+    struct rlimit rl;
+    rl.rlim_cur = 65536;
+    rl.rlim_max = 65536;
+    if (setrlimit(RLIMIT_NOFILE, &rl) != 0) {
+        fprintf(stderr, "Aviso: no se pudo subir el límite de archivos abiertos\n");
+    }
 
     char *archivo = argv[1];
     int K = atoi(argv[2]);
@@ -162,6 +170,8 @@ int main(int argc, char *argv[]) {
                 abortado[i] = 1;
                 terminados++;
                 fprintf(stderr, "Actividad %s abortada (dependencia fallida)\n", actividades[i].id);
+                for (int d = 0; d < actividades[i].num_deps; d++) close(pipe_read[i][d]);
+                for (int k = 0; k < num_out[i]; k++) close(pipe_write_out[i][k]);
                 continue;
             }
 
@@ -174,6 +184,12 @@ int main(int argc, char *argv[]) {
             }
 
             if (pid == 0) {
+                for (int j = 0; j < total; j++) {
+                    if (j == i) continue;
+                    for (int d = 0; d < actividades[j].num_deps; d++) close(pipe_read[j][d]);
+                    for (int k = 0; k < num_out[j]; k++) close(pipe_write_out[j][k]);
+                }
+
                 char buffer[128];
                 for (int d = 0; d < actividades[i].num_deps; d++) {
                     ssize_t n = read(pipe_read[i][d], buffer, sizeof(buffer) - 1);
@@ -182,6 +198,7 @@ int main(int argc, char *argv[]) {
                         printf("[hijo %d] recibido de %s: %s\n",
                                getpid(), actividades[i].deps[d], buffer);
                     }
+                    close(pipe_read[i][d]);
                 }
 
                 printf("[hijo %d] ejecutando %s (%s), %dms\n",
@@ -205,10 +222,14 @@ int main(int argc, char *argv[]) {
                 snprintf(msg, sizeof(msg), "%s completada por PID %d", actividades[i].id, getpid());
                 for (int k = 0; k < num_out[i]; k++) {
                     write(pipe_write_out[i][k], msg, strlen(msg) + 1);
+                    close(pipe_write_out[i][k]);
                 }
 
                 exit(0);
             }
+
+            for (int d = 0; d < actividades[i].num_deps; d++) close(pipe_read[i][d]);
+            for (int k = 0; k < num_out[i]; k++) close(pipe_write_out[i][k]);
 
             corriendo[i] = 1;
             pid_de[i] = pid;
