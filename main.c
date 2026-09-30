@@ -80,7 +80,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    signal(SIGINT, manejador_sigint);
+    struct sigaction sa = {0};
+    sa.sa_handler = manejador_sigint;
+    sigaction(SIGINT, &sa, NULL);
 
     struct rlimit rl;
     rl.rlim_cur = 65536;
