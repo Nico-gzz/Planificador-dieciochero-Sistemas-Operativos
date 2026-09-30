@@ -10,7 +10,7 @@
 #include "dag.h"
 
 #define MAX_ACTIVIDADES 10000
-#define MAX_EDGES 16
+#define MAX_EDGES 100
 
 static pid_t pids_activos[MAX_ACTIVIDADES];
 static int cantidad_pids_activos = 0;
@@ -18,9 +18,7 @@ static int cantidad_pids_activos = 0;
 void manejador_sigint(int sig) {
     (void)sig;
     fprintf(stderr, "\nSIGINT recibido: abortando todas las actividades...\n");
-    for (int i = 0; i < cantidad_pids_activos; i++) {
-        kill(pids_activos[i], SIGTERM);
-    }
+    kill(0, SIGTERM);
     exit(1);
 }
 
