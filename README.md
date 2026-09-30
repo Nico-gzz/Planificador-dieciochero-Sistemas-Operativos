@@ -23,7 +23,7 @@ Si el tiempo se deja vacío, el simulador asigna dinámicamente un valor aleator
 - **parsear_linea**: lee una línea de plan.txt y la convierte en una estructura Actividad, separando ID, nombre, tiempo y dependencias. Se maneja el ID como cadena de texto alfanumérica para mayor flexibilidad.
 - **trim**: elimina espacios en blanco al inicio y final de un texto, necesario para limpiar el formato del archivo de entrada.
 - **buscar_indice**: busca la posición de una actividad en el arreglo a partir de su ID para mapear las dependencias del grafo.
-- **manejador_sigint**: capturador de la señal SIGINT (Ctrl+C). Utiliza `kill(0, SIGTERM)` para enviar una señal de término de forma segura a todo el grupo de procesos activos sin iterar PIDs muertos.
+- **manejador_sigint**: capturador de la señal SIGINT (Ctrl+C) configurado mediante la estructura `sigaction` (estandar de POSIX). Utiliza `kill(0, SIGTERM)` para enviar una señal de término de forma segura a todo el grupo de procesos activos sin iterar PIDs muertos.
 
 ## Decisiones de diseño y arquitectura
 
